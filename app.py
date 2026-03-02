@@ -7,7 +7,7 @@ import time
 import os
 
 # ----------------------------------------
-# CONFIGURAÇÃO DO APP
+# CONFIG APP
 # ----------------------------------------
 st.set_page_config(page_title="Sessão Virtuosa – TJPR", layout="wide")
 st.title("⚖️ Sessão Virtuosa – TJPR")
@@ -21,7 +21,7 @@ O modelo de ementa é interno e já está carregado automaticamente.
 """)
 
 # ----------------------------------------
-# CARREGAR MODELO INTERNO DE EMENTA (EXCEL)
+# CARREGAR MODELO INTERNO (EXCEL)
 # ----------------------------------------
 def carregar_modelo_ementa():
     df = pd.read_excel("modelo_sessao_virtuosa.xlsx")
@@ -30,7 +30,7 @@ def carregar_modelo_ementa():
 modelo_ementa = carregar_modelo_ementa()
 
 # ----------------------------------------
-# CONFIGURAÇÃO DA API GOOGLE
+# API KEY
 # ----------------------------------------
 API_KEY = st.secrets.get("GOOGLE_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
@@ -42,25 +42,22 @@ client = genai.Client(api_key=API_KEY)
 MODEL = "gemini-2.5-flash"
 
 # ----------------------------------------
-# UPLOADS DO USUÁRIO
+# UPLOAD DOS ARQUIVOS
 # ----------------------------------------
 processo_file = st.file_uploader("📄 Processo Judicial Completo (PDF)", type=["pdf"])
 acordao_file = st.file_uploader("📘 Voto / Acórdão (PDF)", type=["pdf"])
 
 # ----------------------------------------
-# UPLOAD FINAL CORRETO PARA O GOOGLE AI
+# UPLOAD FINAL PARA GOOGLE AI (CORRETO!)
 # ----------------------------------------
 def upload_to_gemini(uploaded_file):
-    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         tmp.write(uploaded_file.read())
         tmp_path = tmp.name
-    return client.files.upload(
-        file=tmp_path,
-        mime_type="application/pdf"
-    )
+    return client.files.upload(file=tmp_path)
 
 # ----------------------------------------
-# AGUARDAR PROCESSAMENTO DO GOOGLE
+# AGUARDAR PROCESSAMENTO
 # ----------------------------------------
 def aguardar_processamento(arquivo):
     while arquivo.state in ("PROCESSING", "PENDING"):
@@ -69,7 +66,7 @@ def aguardar_processamento(arquivo):
     return arquivo
 
 # ----------------------------------------
-# BOTÃO DE EXECUÇÃO
+# EXECUTAR ANÁLISE
 # ----------------------------------------
 if st.button("▶️ Executar Análise Completa"):
     if not processo_file or not acordao_file:
@@ -98,9 +95,10 @@ MODELO INTERNO:
 -------------------------
 
 Regras:
-- Seja objetivo e técnico.
-- Use estilo TJPR.
-- Não invente fatos.
+- Objetividade.
+- Técnica jurídica.
+- Estilo TJPR.
+- Sem invenção de fatos.
 """
 
     with st.spinner("Analisando o acórdão..."):
