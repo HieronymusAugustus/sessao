@@ -10,21 +10,25 @@ st.set_page_config(page_title="Sessão Virtuosa – TJPR", layout="wide")
 st.title("⚖️ Sessão Virtuosa – TJPR")
 
 st.write("""
-Envie os arquivos:
-- Processo judicial (PDF)
-- Voto/Acórdão (PDF)
+Envie os dois arquivos PDF:
+- Processo judicial
+- Voto / Acórdão
 
 O modelo de ementa é interno.
 """)
 
-# Modelo interno ----------------------------------------------------
+# -------------------------
+# Carregar modelo interno
+# -------------------------
 def carregar_modelo_ementa():
     df = pd.read_excel("modelo_sessao_virtuosa.xlsx")
     return "\n".join(df.astype(str).apply(" – ".join, axis=1))
 
 modelo_ementa = carregar_modelo_ementa()
 
-# API ---------------------------------------------------------------
+# -------------------------
+# API
+# -------------------------
 API_KEY = st.secrets.get("GOOGLE_API_KEY") or os.getenv("GOOGLE_API_KEY")
 if not API_KEY:
     st.error("API KEY não encontrada.")
@@ -33,11 +37,15 @@ if not API_KEY:
 client = genai.Client(api_key=API_KEY)
 MODEL = "gemini-2.5-flash"
 
-# Uploads -----------------------------------------------------------
+# -------------------------
+# Uploaders
+# -------------------------
 processo_file = st.file_uploader("📄 Processo Judicial (PDF)", type=["pdf"])
 acordao_file = st.file_uploader("📘 Voto/Acórdão (PDF)", type=["pdf"])
 
-# Funções auxiliares ------------------------------------------------
+# -------------------------
+# Funções auxiliares
+# -------------------------
 def upload_to_gemini(uploaded_file):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         tmp.write(uploaded_file.read())
@@ -50,19 +58,26 @@ def aguardar(arquivo):
         arquivo = client.files.get(name=arquivo.name)
     return arquivo
 
-# Sessão ------------------------------------------------------------
+# Sessão
 if "proc" not in st.session_state:
     st.session_state.proc = None
 if "acor" not in st.session_state:
     st.session_state.acor = None
+if "resumo_proc" not in st.session_state:
+    st.session_state.resumo_proc = None
+if "resumo_acor" not in st.session_state:
+    st.session_state.resumo_acor = None
 
-# ETAPA 1 – Inovação Recursal --------------------------------------
-if st.button("1️⃣ Analisar Inovação Recursal"):
+
+# -------------------------
+# ETAPA 0 – RESUMOS AUTOMÁTICOS
+# -------------------------
+if st.button("0️⃣ Gerar Resumos (obrigatório antes das análises)"):
     if not processo_file or not acordao_file:
-        st.warning("Envie os dois PDFs.")
+        st.warning("Envie o processo e o acórdão.")
         st.stop()
 
-    with st.spinner("Enviando arquivos..."):
+    with st.spinner("Enviando arquivos para processamento..."):
         proc = upload_to_gemini(processo_file)
         acor = upload_to_gemini(acordao_file)
         proc = aguardar(proc)
@@ -71,69 +86,130 @@ if st.button("1️⃣ Analisar Inovação Recursal"):
     st.session_state.proc = proc
     st.session_state.acor = acor
 
-    prompt = """
-Você é assessor de desembargador do TJPR.
-Analise se há INOVAÇÃO RECURSAL no voto/acórdão.
-Seja objetivo e técnico.
+    # Resumo do processo
+    prompt_resumo_proc = """
+Resuma o PROCESSO JUDICIAL de forma extremamente objetiva e técnica.
+No máximo 3000 caracteres.
 """
 
-    with st.spinner("Analisando..."):
-        r = client.models.generate_content(
+    with st.spinner("Resumindo o processo..."):
+        r_proc = client.models.generate_content(
             model=MODEL,
-            contents=[proc, acor, prompt],
-            config=GenerateContentConfig(temperature=0.1, max_output_tokens=1500)
+            contents=[proc, prompt_resumo_proc],
+            config=GenerateContentConfig(temperature=0.1, max_output_tokens=1200),
+        )
+
+    st.session_state.resumo_proc = r_proc.text
+
+    # Resumo do acórdão
+    prompt_resumo_acor = """
+Resuma o VOTO/ACÓRDÃO de forma extremamente objetiva e técnica.
+No máximo 3000 caracteres.
+"""
+
+    with st.spinner("Resumindo o acórdão..."):
+        r_acor = client.models.generate_content(
+            model=MODEL,
+            contents=[acor, prompt_resumo_acor],
+            config=GenerateContentConfig(temperature=0.1, max_output_tokens=1200),
+        )
+
+    st.session_state.resumo_acor = r_acor.text
+
+    st.success("Resumos gerados com sucesso! Agora prossiga para as análises.")
+
+
+# -------------------------
+# ETAPA 1 – Inovação Recursal
+# -------------------------
+if st.session_state.resumo_proc and st.button("1️⃣ Analisar Inovação Recursal"):
+    prompt = f"""
+Você é assessor do TJPR.
+
+Com base APENAS nestes resumos:
+
+PROCESSO:
+{st.session_state.resumo_proc}
+
+ACÓRDÃO:
+{st.session_state.resumo_acor}
+
+Analise se há INOVAÇÃO RECURSAL.
+Seja técnico, objetivo e direto.
+"""
+
+    with st.spinner("Analisando inovação recursal..."):
+        r1 = client.models.generate_content(
+            model=MODEL,
+            contents=prompt,
+            config=GenerateContentConfig(temperature=0.1, max_output_tokens=2000),
         )
 
     st.subheader("🔎 Inovação Recursal")
-    st.write(r.text)
+    st.write(r1.text)
 
-# ETAPA 2 – Embargos de Declaração ---------------------------------
-if st.session_state.proc and st.button("2️⃣ Verificar Embargos de Declaração"):
-    proc = st.session_state.proc
-    acor = st.session_state.acor
 
-    prompt = """
+# -------------------------
+# ETAPA 2 – Embargos
+# -------------------------
+if st.session_state.resumo_proc and st.button("2️⃣ Verificar Embargos de Declaração"):
+    prompt = f"""
 Você é assessor do TJPR.
-Verifique o cabimento de EMBARGOS DE DECLARAÇÃO (omissão, obscuridade, contradição, erro material).
-Seja direto e técnico.
+
+Com base APENAS nestes resumos:
+
+PROCESSO:
+{st.session_state.resumo_proc}
+
+ACÓRDÃO:
+{st.session_state.resumo_acor}
+
+Verifique o cabimento de EMBARGOS (omissão, obscuridade, contradição, erro material).
+Seja técnico e objetivo.
 """
 
-    with st.spinner("Analisando..."):
+    with st.spinner("Analisando embargos..."):
         r2 = client.models.generate_content(
             model=MODEL,
-            contents=[proc, acor, prompt],
-            config=GenerateContentConfig(temperature=0.1, max_output_tokens=1500)
+            contents=prompt,
+            config=GenerateContentConfig(temperature=0.1, max_output_tokens=2000),
         )
 
     st.subheader("✉️ Embargos de Declaração")
     st.write(r2.text)
 
-# ETAPA 3 – Sinopse + Comentário -----------------------------------
-if st.session_state.proc and st.button("3️⃣ Gerar Sinopse e Comentário"):
-    proc = st.session_state.proc
-    acor = st.session_state.acor
 
+# -------------------------
+# ETAPA 3 – Sinopse + Comentário
+# -------------------------
+if st.session_state.resumo_proc and st.button("3️⃣ Gerar Sinopse + Comentário"):
     prompt = f"""
-Você é assessor de desembargador do TJPR.
+Você é assessor do TJPR.
 
-Com base NO MODELO abaixo, gere:
-1) SINOPSE (como ementa)
-2) COMENTÁRIO conciso sobre o voto/acórdão
+Com base NO MODELO INTERNO abaixo e nos resumos do processo e do acórdão:
 
 MODELO:
--------
 {modelo_ementa}
--------
 
-Estilo: direto, objetivo e técnico.
+PROCESSO:
+{st.session_state.resumo_proc}
+
+ACÓRDÃO:
+{st.session_state.resumo_acor}
+
+Gere:
+1) SINOPSE no mesmo estilo do modelo interno.
+2) COMENTÁRIO conciso, técnico e direto.
+
+Não invente fatos. Mantenha o estilo do modelo.
 """
 
-    with st.spinner("Gerando..."):
+    with st.spinner("Gerando sinopse e comentário..."):
         r3 = client.models.generate_content(
             model=MODEL,
-            contents=[proc, acor, prompt],
-            config=GenerateContentConfig(temperature=0.1, max_output_tokens=2000)
+            contents=prompt,
+            config=GenerateContentConfig(temperature=0.1, max_output_tokens=3000),
         )
 
-    st.subheader("📝 Sinopse e Comentário")
+    st.subheader("📝 Sinopse + Comentário")
     st.write(r3.text)
