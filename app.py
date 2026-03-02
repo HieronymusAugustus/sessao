@@ -48,13 +48,16 @@ processo_file = st.file_uploader("📄 Processo Judicial Completo (PDF)", type=[
 acordao_file = st.file_uploader("📘 Voto / Acórdão (PDF)", type=["pdf"])
 
 # ----------------------------------------
-# UPLOAD PARA GOOGLE AI (VERSÃO CORRETA)
+# UPLOAD FINAL CORRETO PARA O GOOGLE AI
 # ----------------------------------------
 def upload_to_gemini(uploaded_file):
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
         tmp.write(uploaded_file.read())
         tmp_path = tmp.name
-    return client.files.upload(file=tmp_path)
+    return client.files.upload(
+        file=tmp_path,
+        mime_type="application/pdf"
+    )
 
 # ----------------------------------------
 # AGUARDAR PROCESSAMENTO DO GOOGLE
@@ -82,14 +85,11 @@ if st.button("▶️ Executar Análise Completa"):
 
     st.success("Arquivos prontos! Enviando para análise jurídica...")
 
-    # ----------------------------------------
-    # PROMPT
-    # ----------------------------------------
     prompt = f"""
 Você é assessor de desembargador do TJPR.
 
 1) Verifique se há inovação recursal no voto/acórdão.
-2) Verifique se cabem embargos de declaração (omissão, obscuridade, contradição, erro material).
+2) Verifique se cabem embargos de declaração.
 3) Gere ementa sinóptica e comentário conciso com base no modelo interno.
 
 MODELO INTERNO:
@@ -103,9 +103,6 @@ Regras:
 - Não invente fatos.
 """
 
-    # ----------------------------------------
-    # CHAMADA AO MODELO
-    # ----------------------------------------
     with st.spinner("Analisando o acórdão..."):
         resposta = client.models.generate_content(
             model=MODEL,
