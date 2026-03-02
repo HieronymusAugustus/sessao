@@ -1,0 +1,4 @@
+streamlit
+pandas
+openpyxl
+google-genai>=1.2.0
