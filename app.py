@@ -55,22 +55,14 @@ def aguardar_processamento(arquivo):
         arquivo = client.files.get(name=arquivo.name)
     return arquivo
 
-
-def ler_modelo_ementa(file):
-    if file.name.endswith(".xlsx"):
-        df = pd.read_excel(file)
-        return "\n\n".join(df.astype(str).apply(" – ".join, axis=1))
-    else:
-        return file.read().decode("utf-8")
-
-
 # ---------------------------
 # BOTÃO – PROCESSAR
 # ---------------------------
 if st.button("▶️ Executar Análise Completa"):
-    if not processo_file or not acordao_file or not ementa_file:
-        st.warning("Envie todos os arquivos antes de prosseguir.")
-        st.stop()
+   if not processo_file or not acordao_file:
+       st.warning("Envie o processo e o acórdão antes de prosseguir.")
+       st.stop()
+
 
     with st.spinner("Carregando arquivos no Google AI..."):
         proc_up = upload_to_gemini(processo_file)
@@ -79,8 +71,7 @@ if st.button("▶️ Executar Análise Completa"):
         proc_up = aguardar_processamento(proc_up)
         acor_up = aguardar_processamento(acor_up)
 
-        modelo_ementa = ler_modelo_ementa(ementa_file)
-
+      
     st.success("Arquivos prontos! Enviando para análise jurídica...")
 
     prompt = f"""
