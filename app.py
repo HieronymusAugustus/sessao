@@ -7,7 +7,7 @@ import time
 import os
 
 st.set_page_config(page_title="Analisador Judicial – TJPR", layout="wide")
-st.title("⚖️ Analisador Automático de Acórdão – TJPR")
+st.title("⚖️ Sessão Virtuosa")
 
 st.write("""
 Envie os arquivos abaixo para que o sistema analise:
