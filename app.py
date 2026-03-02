@@ -6,58 +6,68 @@ import tempfile
 import time
 import os
 
-st.set_page_config(page_title="Analisador Judicial – TJPR", layout="wide")
-st.title("⚖️ Sessão Virtuosa")
+# ----------------------------------------
+# CONFIGURAÇÃO DO APP
+# ----------------------------------------
+st.set_page_config(page_title="Sessão Virtuosa – TJPR", layout="wide")
+st.title("⚖️ Sessão Virtuosa – TJPR")
 
 st.write("""
 Envie os arquivos abaixo para que o sistema analise:
 1. Processo judicial inteiro (PDF)
 2. Voto ou Acórdão (PDF)
-3. Arquivo de modelos de ementa (Excel ou TXT)
+
+O modelo de ementa é interno e já está carregado automaticamente.
 """)
 
-# ---------------------------
-# CONFIGURAÇÃO DA API
-# ---------------------------
+# ----------------------------------------
+# CARREGAR MODELO INTERNO DE EMENTA (EXCEL)
+# ----------------------------------------
+def carregar_modelo_ementa():
+    df = pd.read_excel("modelo_sessao_virtuosa.xlsx")
+    return "\n".join(df.astype(str).apply(" – ".join, axis=1))
+
+modelo_ementa = carregar_modelo_ementa()
+
+# ----------------------------------------
+# CONFIGURAÇÃO DA API GOOGLE
+# ----------------------------------------
 API_KEY = st.secrets.get("GOOGLE_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
 if not API_KEY:
-    st.error("API KEY não encontrada! Configure GOOGLE_API_KEY nos Secrets do Streamlit.")
+    st.error("API KEY não encontrada. Configure GOOGLE_API_KEY nos Secrets do Streamlit.")
     st.stop()
 
 client = genai.Client(api_key=API_KEY)
 MODEL = "gemini-2.5-flash"
 
-# ---------------------------
-# UPLOAD DE ARQUIVOS
-# ---------------------------
+# ----------------------------------------
+# UPLOADS DO USUÁRIO
+# ----------------------------------------
 processo_file = st.file_uploader("📄 Processo Judicial Completo (PDF)", type=["pdf"])
 acordao_file = st.file_uploader("📘 Voto / Acórdão (PDF)", type=["pdf"])
-import pandas as pd
 
-def carregar_modelo_ementa():
-    df = pd.read_excel("modelo_sessao_virtuosa.xlsx")
-    # Transforma em texto contínuo
-    return "\n".join(df.astype(str).apply(" – ".join, axis=1))
-
-modelo_ementa = carregar_modelo_ementa()
-
+# ----------------------------------------
+# UPLOAD PARA GOOGLE AI (CORRIGIDO)
+# ----------------------------------------
 def upload_to_gemini(uploaded_file):
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
         tmp.write(uploaded_file.read())
         tmp_path = tmp.name
-    return client.files.upload(file=tmp_path, display_name=uploaded_file.name)
+    return client.files.upload(path=tmp_path)
 
-
+# ----------------------------------------
+# AGUARDAR PROCESSAMENTO DO GOOGLE
+# ----------------------------------------
 def aguardar_processamento(arquivo):
     while arquivo.state in ("PROCESSING", "PENDING"):
         time.sleep(1)
         arquivo = client.files.get(name=arquivo.name)
     return arquivo
 
-# ---------------------------
-# BOTÃO – PROCESSAR
-# ---------------------------
+# ----------------------------------------
+# BOTÃO DE EXECUÇÃO
+# ----------------------------------------
 if st.button("▶️ Executar Análise Completa"):
     if not processo_file or not acordao_file:
         st.warning("Envie o processo e o acórdão antes de prosseguir.")
@@ -72,20 +82,32 @@ if st.button("▶️ Executar Análise Completa"):
 
     st.success("Arquivos prontos! Enviando para análise jurídica...")
 
+    # ----------------------------------------
+    # PROMPT
+    # ----------------------------------------
     prompt = f"""
 Você é assessor de desembargador do TJPR.
 
-1) Verifique se há inovação recursal no voto/acórdão.
-2) Verifique se cabem embargos de declaração.
-3) Gere ementa sinóptica e comentário conciso com base no modelo interno:
+Sua tarefa é analisar:
 
-MODELO:
--------
+1) Se há inovação recursal no voto/acórdão.
+2) Se cabem embargos de declaração (omissão, obscuridade, contradição, erro material).
+3) Gerar ementa sinóptica e comentário conciso com base no modelo:
+
+MODELO INTERNO:
+-------------------------
 {modelo_ementa}
+-------------------------
 
-Responda de forma objetiva, técnica e no estilo TJPR.
+Regras:
+- Seja objetivo e técnico.
+- Use estilo TJPR.
+- Não invente fatos.
 """
 
+    # ----------------------------------------
+    # CHAMADA AO MODELO
+    # ----------------------------------------
     with st.spinner("Analisando o acórdão..."):
         resposta = client.models.generate_content(
             model=MODEL,
