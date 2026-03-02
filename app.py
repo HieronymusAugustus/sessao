@@ -59,10 +59,9 @@ def aguardar_processamento(arquivo):
 # BOTÃO – PROCESSAR
 # ---------------------------
 if st.button("▶️ Executar Análise Completa"):
-   if not processo_file or not acordao_file:
-       st.warning("Envie o processo e o acórdão antes de prosseguir.")
-       st.stop()
-
+    if not processo_file or not acordao_file:
+        st.warning("Envie o processo e o acórdão antes de prosseguir.")
+        st.stop()
 
     with st.spinner("Carregando arquivos no Google AI..."):
         proc_up = upload_to_gemini(processo_file)
@@ -71,37 +70,20 @@ if st.button("▶️ Executar Análise Completa"):
         proc_up = aguardar_processamento(proc_up)
         acor_up = aguardar_processamento(acor_up)
 
-      
     st.success("Arquivos prontos! Enviando para análise jurídica...")
 
     prompt = f"""
 Você é assessor de desembargador do TJPR.
 
-Sua tarefa é analisar, de forma técnica e objetiva:
+1) Verifique se há inovação recursal no voto/acórdão.
+2) Verifique se cabem embargos de declaração.
+3) Gere ementa sinóptica e comentário conciso com base no modelo interno:
 
-1) Verificar **se há inovação recursal** no voto/acórdão enviado.
-   - Cite os trechos relevantes do processo.
-   - Explique por que há ou não há inovação.
-
-2) Analisar **se cabem embargos de declaração** contra o acórdão.
-   Verifique:
-   - obscuridade
-   - contradição
-   - omissão
-   - erro material
-
-3) Com base no arquivo de modelo de ementa sinóptica abaixo, gere:
-   a) **Ementa sinóptica** no mesmo estilo
-   b) **Comentário conciso** sobre a adequação técnica do voto/acórdão.
-
-MODELO DE EMENTA:
------------------
+MODELO:
+-------
 {modelo_ementa}
 
-IMPORTANTE:
-- Responda de modo conciso, objetivo, técnico e no estilo TJPR.
-- Use tópicos curtos.
-- NÃO invente fatos não presentes no processo.
+Responda de forma objetiva, técnica e no estilo TJPR.
 """
 
     with st.spinner("Analisando o acórdão..."):
