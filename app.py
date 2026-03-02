@@ -33,8 +33,14 @@ MODEL = "gemini-2.5-flash"
 # ---------------------------
 processo_file = st.file_uploader("📄 Processo Judicial Completo (PDF)", type=["pdf"])
 acordao_file = st.file_uploader("📘 Voto / Acórdão (PDF)", type=["pdf"])
-ementa_file = st.file_uploader("📝 Modelo de Ementa (Excel .xlsx ou .txt)", type=["xlsx", "txt"])
+import pandas as pd
 
+def carregar_modelo_ementa():
+    df = pd.read_excel("modelo_sessao_virtuosa.xlsx")
+    # Transforma em texto contínuo
+    return "\n".join(df.astype(str).apply(" – ".join, axis=1))
+
+modelo_ementa = carregar_modelo_ementa()
 
 def upload_to_gemini(uploaded_file):
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
