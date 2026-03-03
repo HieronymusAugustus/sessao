@@ -2,33 +2,38 @@ import streamlit as st
 import google.genai as genai
 from google.genai.types import GenerateContentConfig
 import pandas as pd
-import tempfile
+import pypdf
 import time
 import os
+import textwrap
 
+# ---------------------------------------
+# CONFIGURAÇÃO INICIAL
+# ---------------------------------------
 st.set_page_config(page_title="Sessão Virtuosa – TJPR", layout="wide")
 st.title("⚖️ Sessão Virtuosa – TJPR")
 
 st.write("""
 Envie os dois PDFs:
-- Processo judicial
-- Voto/Acórdão
 
-⚠️ Antes de qualquer análise, gere os resumos analíticos.
+- Processo judicial (PDF)
+- Voto / Acórdão (PDF)
+
+Antes de qualquer análise, gere os resumos analíticos automáticos em blocos de 10.000 caracteres.
 """)
 
-# ------------------------------------------
-# Modelo interno (Excel)
-# ------------------------------------------
+# ---------------------------------------
+# MODELO DE EMENTA (EXCEL INTERNO)
+# ---------------------------------------
 def carregar_modelo_ementa():
     df = pd.read_excel("modelo_sessao_virtuosa.xlsx")
     return "\n".join(df.astype(str).apply(" – ".join, axis=1))
 
 modelo_ementa = carregar_modelo_ementa()
 
-# ------------------------------------------
-# API
-# ------------------------------------------
+# ---------------------------------------
+# API GOOGLE
+# ---------------------------------------
 API_KEY = st.secrets.get("GOOGLE_API_KEY") or os.getenv("GOOGLE_API_KEY")
 if not API_KEY:
     st.error("API KEY não encontrada.")
@@ -37,141 +42,167 @@ if not API_KEY:
 client = genai.Client(api_key=API_KEY)
 MODEL = "gemini-1.5-pro"
 
-# ------------------------------------------
-# Uploaders
-# ------------------------------------------
-processo_file = st.file_uploader("📄 Processo Judicial (PDF)", type=["pdf"])
-acordao_file = st.file_uploader("📘 Voto / Acórdão (PDF)", type=["pdf"])
+# ---------------------------------------
+# FUNÇÕES AUXILIARES
+# ---------------------------------------
 
-# ------------------------------------------
-# Auxiliares
-# ------------------------------------------
-def upload_to_gemini(f):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-        tmp.write(f.read())
-        return client.files.upload(file=tmp.name)
+def extrair_texto_pdf(file):
+    """Extrai todo o texto do PDF usando pypdf."""
+    reader = pypdf.PdfReader(file)
+    texto = []
+    for page in reader.pages:
+        try:
+            texto.append(page.extract_text() or "")
+        except:
+            texto.append("")
+    return "\n".join(texto)
 
-def aguardar(arquivo):
-    while arquivo.state in ("PROCESSING", "PENDING"):
-        time.sleep(1)
-        arquivo = client.files.get(name=arquivo.name)
-    return arquivo
+def chunk_text(texto, tamanho=10000):
+    """Divide o texto em blocos de tamanho ~10k caracteres."""
+    return [texto[i:i+tamanho] for i in range(0, len(texto), tamanho)]
 
-# ------------------------------------------
-# Session state
-# ------------------------------------------
-if "proc" not in st.session_state: st.session_state.proc = None
-if "acor" not in st.session_state: st.session_state.acor = None
-if "res_proc" not in st.session_state: st.session_state.res_proc = None
-if "res_acor" not in st.session_state: st.session_state.res_acor = None
+def resumir_chunk(chunk):
+    """Pede ao modelo um mini‑resumo jurídico do bloco."""
+    prompt = f"""
+Você é assessor do TJPR.
 
-# ==========================================
-# 0️⃣ GERAR RESUMOS ANALÍTICOS
-# ==========================================
-if st.button("0️⃣ Gerar Resumos Analíticos (obrigatório)"):
-    if not processo_file or not acordao_file:
-        st.warning("Envie ambos os PDFs.")
-        st.stop()
+Resuma juridicamente o seguinte trecho, mantendo:
 
-    with st.spinner("Enviando arquivos..."):
-        proc = aguardar(upload_to_gemini(processo_file))
-        acor = aguardar(upload_to_gemini(acordao_file))
-
-    st.session_state.proc = proc
-    st.session_state.acor = acor
-
-    # Resumo analítico do processo
-    prompt_proc = """
-Faça um RESUMO ANALÍTICO JURÍDICO COMPLETO do PROCESSO:
-Inclua obrigatoriamente:
-- pedidos da petição inicial
+- pedidos da inicial
 - fundamentos da inicial
 - fundamentos da contestação
 - pontos controvertidos
-- análise da sentença (fundamentos + dispositivo)
-- quem apelou (autor, réu ou ambos)
-- fundamentos da apelação (itemizados)
-- pontos efetivamente devolvidos à instância revisora
+- fundamentos da sentença
+- fundamentos da apelação
+- qualquer elemento útil para inovação recursal e embargos
 
-Máximo: 10.000 caracteres.
-Proibido superficialidade.
+Trecho:
+{chunk}
+
+O resumo deve ser objetivo, completo e técnico.
 """
+    resposta = client.models.generate_content(
+        model=MODEL,
+        contents=prompt,
+        config=GenerateContentConfig(temperature=0.1, max_output_tokens=1000)
+    )
+    return resposta.text
 
-    with st.spinner("Gerando resumo analítico do processo..."):
-        rproc = client.models.generate_content(
-            model=MODEL, contents=[proc, prompt_proc],
-            config=GenerateContentConfig(temperature=0.1, max_output_tokens=3500),
-        )
-    st.session_state.res_proc = rproc.text
 
-    # Resumo analítico do acórdão
-    prompt_acor = """
-Faça um RESUMO ANALÍTICO JURÍDICO COMPLETO do ACÓRDÃO:
-Inclua:
-- fundamentos do voto
-- pontos realmente enfrentados
-- capítulos omitidos
-- coerência interna
-- fundamentos relevantes para reforma/manutenção
-- raciocínio decisório do relator
+def fonte_pequena(texto):
+    """Renderiza texto em fonte menor."""
+    return f"<div style='font-size:0.65rem; color:#555;'>{texto}</div>"
 
-Máximo: 10.000 caracteres.
-Proibido superficialidade.
-"""
 
-    with st.spinner("Gerando resumo analítico do acórdão..."):
-        racor = client.models.generate_content(
-            model=MODEL, contents=[acor, prompt_acor],
-            config=GenerateContentConfig(temperature=0.1, max_output_tokens=3500),
-        )
-    st.session_state.res_acor = racor.text
+# ---------------------------------------
+# STATE
+# ---------------------------------------
+if "res_proc" not in st.session_state:
+    st.session_state.res_proc = None
+if "res_acor" not in st.session_state:
+    st.session_state.res_acor = None
+if "mini_proc" not in st.session_state:
+    st.session_state.mini_proc = []
+if "mini_acor" not in st.session_state:
+    st.session_state.mini_acor = []
 
-    st.success("Resumos gerados. Agora prossiga para as análises.")
+# ---------------------------------------
+# UPLOAD
+# ---------------------------------------
+proc_pdf = st.file_uploader("📄 Processo judicial (PDF)", type=["pdf"])
+acor_pdf = st.file_uploader("📘 Voto / Acórdão (PDF)", type=["pdf"])
 
-# ==========================================
+# =======================================
+# 0️⃣ GERAR RESUMOS ANALÍTICOS AUTOMÁTICOS
+# =======================================
+if st.button("0️⃣ Gerar Resumos Analíticos (obrigatório)"):
+    if not proc_pdf or not acor_pdf:
+        st.warning("Envie ambos os PDFs.")
+        st.stop()
+
+    with st.spinner("Extraindo texto..."):
+        texto_proc = extrair_texto_pdf(proc_pdf)
+        texto_acor = extrair_texto_pdf(acor_pdf)
+
+    chunks_proc = chunk_text(texto_proc, 10000)
+    chunks_acor = chunk_text(texto_acor, 10000)
+
+    mini_resumos_proc = []
+    mini_resumos_acor = []
+
+    # -----------------------
+    # PROCESSO
+    # -----------------------
+    st.subheader("Mini‑resumos do PROCESSO (debug)")
+    for i, ch in enumerate(chunks_proc):
+        with st.spinner(f"Resumindo bloco {i+1}/{len(chunks_proc)} do processo..."):
+            r = resumir_chunk(ch)
+            mini_resumos_proc.append(r)
+            st.markdown(fonte_pequena(f"<b>Bloco {i+1}</b><br>{r}"), unsafe_allow_html=True)
+
+    # -----------------------
+    # ACÓRDÃO
+    # -----------------------
+    st.subheader("Mini‑resumos do ACÓRDÃO (debug)")
+    for i, ch in enumerate(chunks_acor):
+        with st.spinner(f"Resumindo bloco {i+1}/{len(chunks_acor)} do acórdão..."):
+            r = resumir_chunk(ch)
+            mini_resumos_acor.append(r)
+            st.markdown(fonte_pequena(f"<b>Bloco {i+1}</b><br>{r}"), unsafe_allow_html=True)
+
+    # Guarda no estado
+    st.session_state.mini_proc = mini_resumos_proc
+    st.session_state.mini_acor = mini_resumos_acor
+
+    # Consolidação
+    st.session_state.res_proc = "\n".join(mini_resumos_proc)
+    st.session_state.res_acor = "\n".join(mini_resumos_acor)
+
+    st.success("Resumos analíticos gerados com sucesso! Agora prossiga para as análises.")
+
+# =======================================
 # 1️⃣ VERIFICAR EXISTÊNCIA DE INOVAÇÃO RECURSAL
-# ==========================================
+# =======================================
 if st.session_state.res_proc and st.button("1️⃣ Verificar existência de inovação recursal"):
     prompt = f"""
 Você é assessor do TJPR.
-Com base EXCLUSIVAMENTE nos resumos analíticos:
 
-PROCESSO:
+PROCESSO (resumo consolidado):
 {st.session_state.res_proc}
 
-ACÓRDÃO:
+ACÓRDÃO (resumo consolidado):
 {st.session_state.res_acor}
 
 TAREFA:
 1. Identifique quem apelou (autor, réu ou ambos).
 2. Compare:
-   - se apelante for autor → compare INICIAL × APELAÇÃO
-   - se apelante for réu → compare CONTESTAÇÃO × APELAÇÃO
-   - se ambos apelaram → analisar RECURSO POR RECURSO separadamente.
-3. Aponte qualquer matéria NÃO constante das peças originárias.
-4. Dê resposta FINAL curta:
-   - “Há inovação recursal, porque…”
-   - OU “Não há inovação recursal, porque…”
-
-NÃO FAZER: cabeçalho, enfeite, explicação longa.
+   - inicial × apelação (se autor apelou)
+   - contestação × apelação (se réu apelou)
+   - recursos separados (se ambos apelaram)
+3. Verificar se há inovação recursal objetiva.
+4. Resposta final (curta e direta):
+   - "Há inovação recursal, porque..."
+   - ou "Não há inovação recursal, porque..."
 """
 
     with st.spinner("Analisando inovação recursal..."):
         r1 = client.models.generate_content(
-            model=MODEL, contents=prompt,
-            config=GenerateContentConfig(temperature=0.1, max_output_tokens=2500),
+            model=MODEL,
+            contents=prompt,
+            config=GenerateContentConfig(temperature=0.1, max_output_tokens=1500)
         )
 
-    st.subheader("🔎 Inovação Recursal")
+    st.subheader("🔎 Inovação Recursal – Resultado")
     st.write(r1.text)
 
-# ==========================================
+# =======================================
 # 2️⃣ ANALISAR CABIMENTO DE ED
-# ==========================================
+# =======================================
 if st.session_state.res_proc and st.button("2️⃣ Analisar cabimento de ED"):
     prompt = f"""
 Você é assessor do TJPR.
-Com base nos resumos analíticos:
+
+Com base nos resumos:
 
 PROCESSO:
 {st.session_state.res_proc}
@@ -180,56 +211,56 @@ ACÓRDÃO:
 {st.session_state.res_acor}
 
 TAREFA:
-Aponte, em ordem fixa:
-1. OMISSÃO – apenas se o acórdão deixou de decidir ponto relevante.
-2. CONTRADIÇÃO – ignorando meras citações; apenas contradições reais entre fundamentos e conclusão.
-3. OBSCURIDADE – trechos ambíguos.
-4. ERRO MATERIAL – erros numéricos, datas, nomes, valores.
+- Verificar OMISSÃO (item a item)
+- Verificar CONTRADIÇÃO (ignorar citações)
+- Verificar OBSCURIDADE
+- Verificar ERRO MATERIAL
 
-RESPONDA NO FINAL, CURTO:
-- “São cabíveis, porque…”
-- OU “Não são cabíveis, porque…”
+Resposta final (curta):
+- "São cabíveis, porque..."
+- ou "Não são cabíveis, porque..."
 """
 
-    with st.spinner("Analisando cabimento de ED..."):
+    with st.spinner("Analisando ED..."):
         r2 = client.models.generate_content(
-            model=MODEL, contents=prompt,
-            config=GenerateContentConfig(temperature=0.1, max_output_tokens=2500),
+            model=MODEL,
+            contents=prompt,
+            config=GenerateContentConfig(temperature=0.1, max_output_tokens=1500)
         )
 
-    st.subheader("✉️ Embargos de Declaração")
+    st.subheader("✉️ Embargos de Declaração – Resultado")
     st.write(r2.text)
 
-# ==========================================
+# =======================================
 # 3️⃣ SINOPSE + COMENTÁRIO
-# ==========================================
+# =======================================
 if st.session_state.res_proc and st.button("3️⃣ Gerar Sinopse + Comentário"):
     prompt = f"""
 Você é assessor do TJPR.
 
-Use EXCLUSIVAMENTE os resumos analíticos e o MODELO INTERNO abaixo.
-Gere:
+Use EXCLUSIVAMENTE:
 
-1) SINOPSE no MESMO ESTILO do modelo interno (estrutura, forma, concisão).
-2) COMENTÁRIO conciso avaliando a adequação técnica do voto/acórdão.
+PROCESSO (resumo consolidado):
+{st.session_state.res_proc}
+
+ACÓRDÃO (resumo consolidado):
+{st.session_state.res_acor}
 
 MODELO INTERNO:
 {modelo_ementa}
 
-PROCESSO:
-{st.session_state.res_proc}
-
-ACÓRDÃO:
-{st.session_state.res_acor}
+TAREFA:
+1. Gerar SINOPSE no estilo do modelo interno.
+2. Gerar COMENTÁRIO conciso avaliando tecnicamente o acórdão.
 
 NÃO inventar fatos.
-NÃO produzir texto genérico.
 """
 
     with st.spinner("Gerando sinopse e comentário..."):
         r3 = client.models.generate_content(
-            model=MODEL, contents=prompt,
-            config=GenerateContentConfig(temperature=0.1, max_output_tokens=3000),
+            model=MODEL,
+            contents=prompt,
+            config=GenerateContentConfig(temperature=0.1, max_output_tokens=2500)
         )
 
     st.subheader("📝 Sinopse + Comentário")
