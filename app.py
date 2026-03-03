@@ -35,7 +35,7 @@ if not API_KEY:
     st.stop()
 
 client = genai.Client(api_key=API_KEY)
-MODEL = "gemini-2.0-pro"
+MODEL = "gemini-1.5-pro"
 
 # ------------------------------------------
 # Uploaders
