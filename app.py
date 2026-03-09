@@ -5,20 +5,83 @@ from google.genai.errors import ClientError
 import pypdf
 import pandas as pd
 import os
+import requests  # para OpenRouter (se quiser usar REST direto)
 
 st.set_page_config(page_title="Sessão Virtuosa – TJPR", layout="wide")
 st.title("⚖️ Sessão Virtuosa – TJPR")
 
 # ============================================================
-# CONFIGURAÇÃO DA API
+# CONFIGURAÇÃO DAS API KEYS (3 Google + 1 OpenRouter)
 # ============================================================
 
-API_KEY = st.secrets.get("GOOGLE_API_KEY") or os.getenv("GOOGLE_API_KEY")
-if not API_KEY:
-    st.error("API KEY não encontrada nos secrets.")
+# Lê sempre dos secrets, com fallback opcional para env vars.
+GOOGLE_KEYS = [
+    st.secrets.get("GOOGLE_API_KEY_1") or os.getenv("GOOGLE_API_KEY_1"),
+    st.secrets.get("GOOGLE_API_KEY_2") or os.getenv("GOOGLE_API_KEY_2"),
+    st.secrets.get("GOOGLE_API_KEY_3") or os.getenv("GOOGLE_API_KEY_3"),
+]
+
+OPENROUTER_API_KEY = st.secrets.get("OPENROUTER_API_KEY") or os.getenv("OPENROUTER_API_KEY")
+
+# Remove Nones
+GOOGLE_KEYS = [k for k in GOOGLE_KEYS if k]
+
+if not GOOGLE_KEYS:
+    st.error("Nenhuma GOOGLE_API_KEY encontrada nos secrets/variáveis de ambiente.")
     st.stop()
 
-client = genai.Client(api_key=API_KEY)
+if not OPENROUTER_API_KEY:
+    st.warning("OPENROUTER_API_KEY não encontrada nos secrets/variáveis de ambiente (apenas recursos Google funcionarão).")
+
+# ============================================================
+# SELEÇÃO DA CHAVE GOOGLE
+# ============================================================
+
+st.subheader("Seleção de chave da Google")
+
+opcoes_keys = [f"Chave Google #{i+1}" for i in range(len(GOOGLE_KEYS))]
+idx_key_escolhida = st.selectbox(
+    "Escolha qual chave da Google usar:",
+    list(range(len(GOOGLE_KEYS))),
+    format_func=lambda i: opcoes_keys[i],
+    index=0
+)
+
+API_KEY_GOOGLE_ATIVA = GOOGLE_KEYS[idx_key_escolhida]
+
+# Cria cliente Google Gemini com a chave escolhida
+client = genai.Client(api_key=API_KEY_GOOGLE_ATIVA)
+
+# ============================================================
+# (Opcional) Cliente / config para OpenRouter
+# ============================================================
+
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+def chamar_openrouter(prompt: str, model: str = "openrouter/auto") -> str:
+    """
+    Exemplo simples de chamada ao OpenRouter via REST.
+    Você pode adaptar para a lib openai se preferir.
+    """
+    if not OPENROUTER_API_KEY:
+        return "[OPENROUTER] API key não configurada."
+
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "user", "content": prompt}
+        ]
+    }
+    try:
+        resp = requests.post(OPENROUTER_API_URL, headers=headers, json=payload, timeout=60)
+        data = resp.json()
+        return data["choices"][0]["message"]["content"]
+    except Exception as e:
+        return f"[ERRO OPENROUTER: {e}]"
 
 # =======================
 # MODELOS DISPONÍVEIS
@@ -31,34 +94,34 @@ MODELOS_VALIDOS = [
     "gemini-2.0-pro",
 ]
 
-st.subheader("Seleção de modelo")
+st.subheader("Seleção de modelo Google Gemini")
 
 modelo_escolhido = st.selectbox(
-    "Escolha o modelo para uso:",
+    "Escolha o modelo para uso (Google):",
     MODELOS_VALIDOS,
-    index=0  # gemini-2.0-flash por padrão
+    index=0
 )
 
 MODEL = modelo_escolhido
-st.write(f"📌 Modelo selecionado: **{MODEL}**")
+st.write(f"📌 Modelo Google selecionado: **{MODEL}** com {opcoes_keys[idx_key_escolhida]}")
 
 # ============================================================
-# TESTADOR AUTOMÁTICO DE API KEY
+# TESTADOR AUTOMÁTICO DA API KEY GOOGLE
 # ============================================================
 
-st.subheader("Teste automático da API KEY")
+st.subheader("Teste automático da API KEY Google")
 
-def testar_api_key(model):
+def testar_api_key_google(model):
     try:
         resposta = client.models.generate_content(
             model=model,
             contents="teste",
             config=GenerateContentConfig(
-                max_output_tokens=5, 
+                max_output_tokens=5,
                 temperature=0
             )
         )
-        return ("OK", "API KEY válida e com quota disponível.")
+        return ("OK", "API KEY Google válida e com quota disponível.")
     except Exception as e:
         erro = str(e)
         if "401" in erro or "PERMISSION_DENIED" in erro:
@@ -66,10 +129,10 @@ def testar_api_key(model):
         if "404" in erro:
             return ("ERRO", f"Modelo '{model}' não existe para esta conta.")
         if "429" in erro or "RESOURCE_EXHAUSTED" in erro:
-            return ("ERRO", "Sem quota. Sua API KEY está com LIMIT=0. É necessário habilitar billing ou usar outra chave.")
+            return ("ERRO", "Sem quota. API KEY está com LIMIT=0. Habilite billing ou use outra chave.")
         return ("ERRO", f"Erro inesperado: {erro}")
 
-status, mensagem = testar_api_key(MODEL)
+status, mensagem = testar_api_key_google(MODEL)
 
 if status == "OK":
     st.success(mensagem)
@@ -78,7 +141,7 @@ else:
     st.stop()
 
 # ============================================================
-# FUNÇÕES AUXILIARES
+# FUNÇÕES AUXILIARES (mesmas, usando client Google)
 # ============================================================
 
 def extrair_texto_pdf(file):
@@ -115,7 +178,7 @@ Resumo jurídico, técnico e completo, incluindo pedidos, fundamentos e controv�
         )
         return r.text
     except Exception as e:
-        return f"[ERRO NO MODELO: {e}]"
+        return f"[ERRO NO MODELO GOOGLE: {e}]"
 
 def fonte_pequena(texto):
     return f"<div style='font-size:0.75rem; color:#555;'>{texto}</div>"
@@ -180,7 +243,7 @@ if st.button("0️⃣ Gerar Resumos Analíticos (obrigatório)"):
     st.success("✔ Resumos gerados.")
 
 # ============================================================
-# 1️⃣ INOVAÇÃO RECURSAL
+# 1️⃣ INOVAÇÃO RECURSAL (Google)
 # ============================================================
 
 if st.session_state.res_proc and st.button("1️⃣ Verificar existência de inovação recursal"):
@@ -206,13 +269,13 @@ TAREFA:
             contents=prompt,
             config=GenerateContentConfig(max_output_tokens=1500)
         )
-        st.subheader("🔎 Resultado – Inovação Recursal")
+        st.subheader("🔎 Resultado – Inovação Recursal (Google)")
         st.write(r.text)
     except Exception as e:
-        st.error(f"Erro na inovação recursal: {e}")
+        st.error(f"Erro na inovação recursal (Google): {e}")
 
 # ============================================================
-# 2️⃣ EMBARGOS DE DECLARAÇÃO
+# 2️⃣ EMBARGOS DE DECLARAÇÃO (Google)
 # ============================================================
 
 if st.session_state.res_proc and st.button("2️⃣ Analisar cabimento de ED"):
@@ -241,13 +304,13 @@ ou
             contents=prompt,
             config=GenerateContentConfig(max_output_tokens=1500)
         )
-        st.subheader("✉️ Resultado – Embargos de Declaração")
+        st.subheader("✉️ Resultado – Embargos de Declaração (Google)")
         st.write(r.text)
     except Exception as e:
-        st.error(f"Erro nos embargos: {e}")
+        st.error(f"Erro nos embargos (Google): {e}")
 
 # ============================================================
-# 3️⃣ SINOPSE + COMENTÁRIO
+# 3️⃣ SINOPSE + COMENTÁRIO (Google)
 # ============================================================
 
 if st.session_state.res_proc and st.button("3️⃣ Gerar Sinopse + Comentário"):
@@ -275,7 +338,7 @@ Sem inventar fatos.
             contents=prompt,
             config=GenerateContentConfig(max_output_tokens=2500)
         )
-        st.subheader("📝 Sinopse + Comentário")
+        st.subheader("📝 Sinopse + Comentário (Google)")
         st.write(r.text)
     except Exception as e:
-        st.error(f"Erro na Sinopse/Comentário: {e}")
+        st.error(f"Erro na Sinopse/Comentário (Google): {e}")
