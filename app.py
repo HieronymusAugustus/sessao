@@ -5,7 +5,7 @@ from google.genai.errors import ClientError
 import pypdf
 import pandas as pd
 import os
-import requests  # para OpenRouter (se quiser usar REST direto)
+import requests  # se já estiver usando OpenRouter
 
 st.set_page_config(page_title="Sessão Virtuosa – TJPR", layout="wide")
 st.title("⚖️ Sessão Virtuosa – TJPR")
@@ -14,7 +14,6 @@ st.title("⚖️ Sessão Virtuosa – TJPR")
 # CONFIGURAÇÃO DAS API KEYS (3 Google + 1 OpenRouter)
 # ============================================================
 
-# Lê sempre dos secrets, com fallback opcional para env vars.
 GOOGLE_KEYS = [
     st.secrets.get("GOOGLE_API_KEY_1") or os.getenv("GOOGLE_API_KEY_1"),
     st.secrets.get("GOOGLE_API_KEY_2") or os.getenv("GOOGLE_API_KEY_2"),
@@ -23,7 +22,6 @@ GOOGLE_KEYS = [
 
 OPENROUTER_API_KEY = st.secrets.get("OPENROUTER_API_KEY") or os.getenv("OPENROUTER_API_KEY")
 
-# Remove Nones
 GOOGLE_KEYS = [k for k in GOOGLE_KEYS if k]
 
 if not GOOGLE_KEYS:
@@ -31,7 +29,7 @@ if not GOOGLE_KEYS:
     st.stop()
 
 if not OPENROUTER_API_KEY:
-    st.warning("OPENROUTER_API_KEY não encontrada nos secrets/variáveis de ambiente (apenas recursos Google funcionarão).")
+    st.warning("OPENROUTER_API_KEY não encontrada (apenas recursos Google funcionarão).")
 
 # ============================================================
 # SELEÇÃO DA CHAVE GOOGLE
@@ -49,20 +47,15 @@ idx_key_escolhida = st.selectbox(
 
 API_KEY_GOOGLE_ATIVA = GOOGLE_KEYS[idx_key_escolhida]
 
-# Cria cliente Google Gemini com a chave escolhida
 client = genai.Client(api_key=API_KEY_GOOGLE_ATIVA)
 
 # ============================================================
-# (Opcional) Cliente / config para OpenRouter
+# (Opcional) OpenRouter – se já estiver usando
 # ============================================================
 
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 def chamar_openrouter(prompt: str, model: str = "openrouter/auto") -> str:
-    """
-    Exemplo simples de chamada ao OpenRouter via REST.
-    Você pode adaptar para a lib openai se preferir.
-    """
     if not OPENROUTER_API_KEY:
         return "[OPENROUTER] API key não configurada."
 
@@ -87,11 +80,13 @@ def chamar_openrouter(prompt: str, model: str = "openrouter/auto") -> str:
 # MODELOS DISPONÍVEIS
 # =======================
 
+# Modelos mais simples e ainda em uso (evitando os com desativação iminente)
+# gemini-2.0-* → recomendação oficial: migrar para 2.5-flash / 2.5-flash-lite.[page:1]
 MODELOS_VALIDOS = [
-    "gemini-2.0-flash",
     "gemini-2.5-flash",
-    "gemini-2.5-flash-exp",
-    "gemini-2.0-pro",
+    "gemini-2.5-flash-lite",
+    "gemini-3-flash-preview",         # se quiser já testar 3.x preview
+    "gemini-3.1-flash-lite-preview",  # simples e em prévia
 ]
 
 st.subheader("Seleção de modelo Google Gemini")
@@ -129,7 +124,7 @@ def testar_api_key_google(model):
         if "404" in erro:
             return ("ERRO", f"Modelo '{model}' não existe para esta conta.")
         if "429" in erro or "RESOURCE_EXHAUSTED" in erro:
-            return ("ERRO", "Sem quota. API KEY está com LIMIT=0. Habilite billing ou use outra chave.")
+            return ("ERRO", "Sem quota. API KEY está com LIMIT=0 ou modelo saturado.")
         return ("ERRO", f"Erro inesperado: {erro}")
 
 status, mensagem = testar_api_key_google(MODEL)
@@ -141,7 +136,7 @@ else:
     st.stop()
 
 # ============================================================
-# FUNÇÕES AUXILIARES (mesmas, usando client Google)
+# FUNÇÕES AUXILIARES
 # ============================================================
 
 def extrair_texto_pdf(file):
@@ -243,7 +238,7 @@ if st.button("0️⃣ Gerar Resumos Analíticos (obrigatório)"):
     st.success("✔ Resumos gerados.")
 
 # ============================================================
-# 1️⃣ INOVAÇÃO RECURSAL (Google)
+# 1️⃣ INOVAÇÃO RECURSAL
 # ============================================================
 
 if st.session_state.res_proc and st.button("1️⃣ Verificar existência de inovação recursal"):
@@ -275,7 +270,7 @@ TAREFA:
         st.error(f"Erro na inovação recursal (Google): {e}")
 
 # ============================================================
-# 2️⃣ EMBARGOS DE DECLARAÇÃO (Google)
+# 2️⃣ EMBARGOS DE DECLARAÇÃO
 # ============================================================
 
 if st.session_state.res_proc and st.button("2️⃣ Analisar cabimento de ED"):
@@ -310,7 +305,7 @@ ou
         st.error(f"Erro nos embargos (Google): {e}")
 
 # ============================================================
-# 3️⃣ SINOPSE + COMENTÁRIO (Google)
+# 3️⃣ SINOPSE + COMENTÁRIO
 # ============================================================
 
 if st.session_state.res_proc and st.button("3️⃣ Gerar Sinopse + Comentário"):
