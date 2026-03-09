@@ -5,7 +5,9 @@ from google.genai.errors import ClientError
 import pypdf
 import pandas as pd
 import os
-import requests  # se já estiver usando OpenRouter
+import requests
+import time
+import json
 
 st.set_page_config(page_title="Sessão Virtuosa – TJPR", layout="wide")
 st.title("⚖️ Sessão Virtuosa – TJPR")
@@ -49,44 +51,13 @@ API_KEY_GOOGLE_ATIVA = GOOGLE_KEYS[idx_key_escolhida]
 
 client = genai.Client(api_key=API_KEY_GOOGLE_ATIVA)
 
-# ============================================================
-# (Opcional) OpenRouter – se já estiver usando
-# ============================================================
-
-OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-
-def chamar_openrouter(prompt: str, model: str = "openrouter/auto") -> str:
-    if not OPENROUTER_API_KEY:
-        return "[OPENROUTER] API key não configurada."
-
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "user", "content": prompt}
-        ]
-    }
-    try:
-        resp = requests.post(OPENROUTER_API_URL, headers=headers, json=payload, timeout=60)
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
-    except Exception as e:
-        return f"[ERRO OPENROUTER: {e}]"
-
 # =======================
 # MODELOS DISPONÍVEIS
 # =======================
 
-# Modelos mais simples e ainda em uso (evitando os com desativação iminente)
-# gemini-2.0-* → recomendação oficial: migrar para 2.5-flash / 2.5-flash-lite.[page:1]
 MODELOS_VALIDOS = [
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
-    "gemini-3-flash-preview",         # se quiser já testar 3.x preview
-    "gemini-3.1-flash-lite-preview",  # simples e em prévia
 ]
 
 st.subheader("Seleção de modelo Google Gemini")
@@ -124,7 +95,7 @@ def testar_api_key_google(model):
         if "404" in erro:
             return ("ERRO", f"Modelo '{model}' não existe para esta conta.")
         if "429" in erro or "RESOURCE_EXHAUSTED" in erro:
-            return ("ERRO", "Sem quota. API KEY está com LIMIT=0 ou modelo saturado.")
+            return ("ERRO", "Sem quota no momento. Aguarde 1 minuto e tente novamente.")
         return ("ERRO", f"Erro inesperado: {erro}")
 
 status, mensagem = testar_api_key_google(MODEL)
@@ -134,6 +105,48 @@ if status == "OK":
 else:
     st.error(mensagem)
     st.stop()
+
+# ============================================================
+# FUNÇÃO GENÉRICA COM RETRY (EVITA ESTOURAR QUOTA)
+# ============================================================
+
+def gerar_conteudo_com_retry(prompt: str, max_tokens: int = 600, temperatura: float = 0.1):
+    """Wrapper para GenerateContent com retry em caso de 429/RESOURCE_EXHAUSTED."""
+    tentativas = 3
+    for tentativa in range(tentativas):
+        try:
+            r = client.models.generate_content(
+                model=MODEL,
+                contents=prompt,
+                config=GenerateContentConfig(
+                    temperature=temperatura,
+                    max_output_tokens=max_tokens
+                )
+            )
+            return r.text
+        except Exception as e:
+            msg = str(e)
+            # Se for quota/rate limit, tenta respeitar o retryDelay
+            if "RESOURCE_EXHAUSTED" in msg or "429" in msg:
+                # tenta extrair retryDelay do JSON, se vier
+                retry_seconds = 60
+                try:
+                    d = json.loads(msg[msg.find("{"):])
+                    details = d.get("error", {}).get("details", [])
+                    for det in details:
+                        if det.get("@type", "").endswith("RetryInfo"):
+                            delay = det.get("retryDelay", "60s")
+                            retry_seconds = int(delay.replace("s", "")) or 60
+                            break
+                except Exception:
+                    pass
+                if tentativa < tentativas - 1:
+                    st.warning(f"Quota temporariamente esgotada. Aguardando {retry_seconds}s e tentando novamente...")
+                    time.sleep(retry_seconds)
+                    continue
+            # Se não for erro de quota, ou acabou as tentativas, devolve erro
+            return f"[ERRO NO MODELO GOOGLE: {e}]"
+    return "[ERRO NO MODELO GOOGLE: muitas tentativas com RESOURCE_EXHAUSTED]"
 
 # ============================================================
 # FUNÇÕES AUXILIARES
@@ -149,7 +162,7 @@ def extrair_texto_pdf(file):
             texto.append("")
     return "\n".join(texto)
 
-def chunk_text(texto, tamanho=10000):
+def chunk_text(texto, tamanho=8000):
     return [texto[i:i+tamanho] for i in range(0, len(texto), tamanho)]
 
 def resumir_chunk(chunk):
@@ -162,18 +175,7 @@ Resuma juridicamente o trecho abaixo:
 
 Resumo jurídico, técnico e completo, incluindo pedidos, fundamentos e controvérsias.
 """
-    try:
-        r = client.models.generate_content(
-            model=MODEL,
-            contents=prompt,
-            config=GenerateContentConfig(
-                temperature=0.1,
-                max_output_tokens=800
-            )
-        )
-        return r.text
-    except Exception as e:
-        return f"[ERRO NO MODELO GOOGLE: {e}]"
+    return gerar_conteudo_com_retry(prompt, max_tokens=500, temperatura=0.1)
 
 def fonte_pequena(texto):
     return f"<div style='font-size:0.75rem; color:#555;'>{texto}</div>"
@@ -198,8 +200,10 @@ proc_pdf = st.file_uploader("📄 Processo judicial (PDF)", type=["pdf"])
 acor_pdf = st.file_uploader("📘 Voto / Acórdão (PDF)", type=["pdf"])
 
 # ============================================================
-# 0️⃣ GERAR RESUMOS
+# 0️⃣ GERAR RESUMOS (AJUSTADO PARA FREE TIER)
 # ============================================================
+
+modo_economico = st.checkbox("Modo econômico (menos blocos, menos chamadas)", value=True)
 
 if st.button("0️⃣ Gerar Resumos Analíticos (obrigatório)"):
     if not proc_pdf or not acor_pdf:
@@ -212,6 +216,12 @@ if st.button("0️⃣ Gerar Resumos Analíticos (obrigatório)"):
 
     chunks_proc = chunk_text(texto_proc)
     chunks_acor = chunk_text(texto_acor)
+
+    # Limita quantidade de chunks no free tier
+    if modo_economico:
+        max_chunks = 5
+        chunks_proc = chunks_proc[:max_chunks]
+        chunks_acor = chunks_acor[:max_chunks]
 
     mini_p = []
     mini_a = []
@@ -258,16 +268,9 @@ TAREFA:
    • “Há inovação recursal, porque…”
    • ou “Não há inovação recursal, porque…”
 """
-    try:
-        r = client.models.generate_content(
-            model=MODEL,
-            contents=prompt,
-            config=GenerateContentConfig(max_output_tokens=1500)
-        )
-        st.subheader("🔎 Resultado – Inovação Recursal (Google)")
-        st.write(r.text)
-    except Exception as e:
-        st.error(f"Erro na inovação recursal (Google): {e}")
+    r_text = gerar_conteudo_com_retry(prompt, max_tokens=900, temperatura=0.2)
+    st.subheader("🔎 Resultado – Inovação Recursal (Google)")
+    st.write(r_text)
 
 # ============================================================
 # 2️⃣ EMBARGOS DE DECLARAÇÃO
@@ -293,16 +296,9 @@ Conclusão curta:
 ou 
 “Não são cabíveis, porque…”
 """
-    try:
-        r = client.models.generate_content(
-            model=MODEL,
-            contents=prompt,
-            config=GenerateContentConfig(max_output_tokens=1500)
-        )
-        st.subheader("✉️ Resultado – Embargos de Declaração (Google)")
-        st.write(r.text)
-    except Exception as e:
-        st.error(f"Erro nos embargos (Google): {e}")
+    r_text = gerar_conteudo_com_retry(prompt, max_tokens=900, temperatura=0.2)
+    st.subheader("✉️ Resultado – Embargos de Declaração (Google)")
+    st.write(r_text)
 
 # ============================================================
 # 3️⃣ SINOPSE + COMENTÁRIO
@@ -327,13 +323,6 @@ Elabore:
 
 Sem inventar fatos.
 """
-    try:
-        r = client.models.generate_content(
-            model=MODEL,
-            contents=prompt,
-            config=GenerateContentConfig(max_output_tokens=2500)
-        )
-        st.subheader("📝 Sinopse + Comentário (Google)")
-        st.write(r.text)
-    except Exception as e:
-        st.error(f"Erro na Sinopse/Comentário (Google): {e}")
+    r_text = gerar_conteudo_com_retry(prompt, max_tokens=1600, temperatura=0.2)
+    st.subheader("📝 Sinopse + Comentário (Google)")
+    st.write(r_text)
